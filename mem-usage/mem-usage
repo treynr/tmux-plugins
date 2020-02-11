@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+
+## file: mem-usage
+## desc: Shell script designed report memory usage. Outputs, in MB, 
+##       used / total memory, and a small colored bar depicting usage.
+
+## Get the memory usage stats
+stats=$(vmstat -s)
+## Total memory
+total=$(sed -re 's/\s*([0-9]+) K total mem.+/\1/' <<< $stats)
+## Used memory
+used=$(sed -re 's/.+\s+([0-9]+) K used m.*/\1/' <<< $stats)
+## Split total memory size into ten even chunks
+chunks=$((total / 10))
+## Vertical bar symbol
+symbol="\xE2\x9D\x99"
+bar="[          ]"
+usage=0
+used_chunks=0
+
+while [ $usage -lt $used ]
+do
+    usage=$(($usage + $chunks))
+    bar="${bar/ /$symbol}"
+    used_chunks=$(($used_chunks + 1))
+done
+
+total_mb=$((total / 1024))
+used_mb=$((used / 1024))
+
+if [[ $used_chunks -lt 4 ]]; then
+    echo -e "#[fg=#a1b56c]${used_mb}/${total_mb}MB $bar"
+elif [[ $used_chunks -lt 7 ]]; then
+    echo -e "#[fg=#f7ca88]${used_mb}/${total_mb}MB $bar"
+else
+    echo -e "#[fg=#ab4642]${used_mb}/${total_mb}MB $bar"
+fi
+

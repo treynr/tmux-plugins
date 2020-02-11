@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+
+## file: tms-authorize
+## desc: tmux Spotify integration. Use this to authorize the tms script to
+##       pull from the Spotify API.
+
+auth_cfg="$HOME/.tms.auth.cfg"
+auth_url='https://accounts.spotify.com/authorize'
+token_url="https://accounts.spotify.com/api/token"
+response_type='response_type=code'
+scope="user-read-currently-playing"
+
+make_cfg() {
+
+    jq -n '{
+        client_id: "", 
+        secret: "", 
+        redirect: "",
+        access: "",
+        refresh: "",
+        time: 0
+    }'
+}
+
+if [[ ! -f "$auth_cfg" ]]; then
+
+    echo "Please fill out $auth_cfg with your Spotify credentials"
+
+    make_cfg > "$auth_cfg"
+
+    exit 0
+fi
+
+print_url=""
+
+while :; do
+    case $1 in
+        #-h | -\? | --help)
+        -u | --url)
+            print_url="1"
+            ;;
+        --)
+            shift
+            break
+            ;;
+        -?*)
+            echo "WARN: unknown option (ignored): $1" >&2
+            ;;
+        *)
+            break
+    esac
+
+    shift
+done
+
+## Read in configuration variables
+client_id=$(jq -r '.client_id' < "$auth_cfg")
+client_secret=$(jq -r '.secret' < "$auth_cfg")
+redirect=$(jq -r '.redirect' < "$auth_cfg")
+
+if [[ -z "$client_id" ]]; then
+    echo "ERROR: Your client id is missing from $auth_cfg"
+    exit 1
+fi
+
+if [[ -z "$client_secret" ]]; then
+    echo "ERROR: Your client secret is missing from $auth_cfg"
+    exit 1
+fi
+
+if [[ -z "$redirect" ]]; then
+    echo "ERROR: Your redirect URI is missing from $auth_cfg"
+    exit 1
+fi
+
+url="$auth_url?$response_type&client_id=$client_id&scope=$scope&redirect_uri=$redirect"
+
+if [[ -n "$print_url" ]]; then
+    echo "$url"
+else
+    python2 -m webbrowser "$url"
+fi
+
+echo "Copy pasta the URL spotify gives you:"
+
+read spotify_callback
+
+## Isolate the returned code
+code=$(echo "$spotify_callback" | sed -re 's/.+code.?=(.+)/\1/')
+
+## Request the access and refresh tokens
+response=$(
+curl -s -S -X POST "$token_url"                      \
+    --data-urlencode "client_id=$client_id"          \
+    --data-urlencode "client_secret=$client_secret"  \
+    --data-urlencode "grant_type=authorization_code" \
+    --data-urlencode "code=$code"                    \
+    --data-urlencode "redirect_uri=$redirect" 2>> tms-auth-errors.log
+)
+
+error="$(echo $response | jq -r 'has("error")')"
+
+if [[ "$error" == "true" ]]; then
+
+    echo "There was an error during authorization:"
+    echo "$(echo $response | jq -r '.error')"
+    echo "$(echo $response | jq -r '.error_description')"
+
+    exit 1
+fi
+
+access=$(echo "$response" | jq -r '.access_token')
+refresh=$(echo "$response" | jq -r '.refresh_token')
+expires=$(echo "$response" | jq -r '.expires_in')
+
+epoch=$(date +%s)
+time=$(($epoch + $expires))
+
+config=$(
+    cat "$auth_cfg" | 
+    jq -r --arg access "$access" --arg refresh "$refresh" --arg expires "$time" '
+        { 
+            client_id, 
+            secret, 
+            redirect, 
+            access: $access, 
+            refresh: $refresh, 
+            expires: ($expires | tonumber)
+        }
+')
+
+echo "$config" > "$auth_cfg"
+

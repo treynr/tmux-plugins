@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+
+## file: tms
+## desc: tmux Spotify integration. Adds the currently playing song and artist 
+##       to the tmux status bar.
+
+## This contains the client ID, access tokens, etc. for the Spotify API
+auth_cfg="$HOME/.tms.auth.cfg"
+token_url="https://accounts.spotify.com/api/token"
+
+if [[ ! -f "$auth_cfg" ]]; then
+    echo "ERROR: Can't find auth config"
+    exit 1
+fi
+
+config="$(cat $auth_cfg)"
+
+if [[ -z "$(jq -r '.client_id' <<< $config)" ]]; then
+    echo "ERROR: Your client id is missing from $auth_cfg"
+    exit 1
+fi
+
+if [[ -z "$(jq -r '.secret' <<< $config)" ]]; then
+    echo "ERROR: Your client secret is missing from $auth_cfg"
+    exit 1
+fi
+
+diff=$(jq --arg t $(date +%s) '.expires - ($t | tonumber)' <<< $config)
+
+if [[ $diff -le 120 ]]; then 
+
+    client_id="$(jq -r '.client_id' <<< $config)"
+    secret="$(jq -r '.secret' <<< $config)"
+    refresh="$(jq -r '.refresh' <<< $config)"
+
+    response=$(
+        curl -s -S -X POST "$token_url" \
+            --data-urlencode "client_id=$client_id" \
+            --data-urlencode "client_secret=$secret" \
+            --data-urlencode "grant_type=refresh_token" \
+            --data-urlencode "refresh_token=$refresh" 2>> tms-auth-errors.log
+    )
+
+    error="$(jq -r 'has("error")' <<< $response)"
+
+    if [[ "$error" != "false" ]]; then
+
+        status=$(jq -r '.. | .status? | select(type != null)' <<< $response)
+        message=$(jq -r '.. | .message? | select(type != null)' <<< $response)
+
+        if [[ "$status" != "null" && "$message" != "null" ]]; then
+            echo "$status - $message"
+        else
+            echo "$(jq -r '.error?' <<< $response)"
+        fi
+
+        exit 1
+    fi
+
+    access=$(jq -r '.access_token' <<< $response)
+    expires=$(jq -r '.expires_in' <<< $response)
+
+    epoch=$(date +%s)
+    time=$(($epoch + $expires))
+
+    echo "$config" | jq -r --arg access "$access" --arg expires "$expires" '
+        { 
+            client_id, 
+            secret, 
+            redirect, 
+            access: $access, 
+            refresh, 
+            expires: $expires
+        }
+    ' > "$auth_cfg"
+fi
+
+current_url="https://api.spotify.com/v1/me/player/currently-playing"
+access=$(jq -r '.access' < "$auth_cfg")
+
+## Get what's currently playing
+current=$(curl -s -S -X GET "$current_url" -H "Authorization: Bearer $access")
+
+is_playing=$(jq -r '.is_playing' <<< "$current")
+artist=$(jq -r '.item.artists[0].name' <<< "$current")
+track=$(jq -r '.item.name' <<< "$current")
+
+if [[ "$is_playing" == "true" ]]; then
+    echo -e "\xe2\x99\xac $artist - $track"
+else
+    echo -e "\xE2\x80\x96"
+fi
