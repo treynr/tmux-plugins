@@ -4,12 +4,10 @@
 ## desc: Shell script designed report memory usage. Outputs, in MB, 
 ##       used / total memory, and a small colored bar depicting usage.
 
-## Get the memory usage stats
-stats=$(vmstat -s)
 ## Total memory
-total=$(sed -re 's/\s*([0-9]+) K total mem.+/\1/' <<< $stats)
+total=$(vmstat -s | grep -E '\s*([0-9]+) K total mem.+' | sed -re 's/\s*([0-9]+).+/\1/')
 ## Used memory
-used=$(sed -re 's/.+\s+([0-9]+) K used m.*/\1/' <<< $stats)
+used=$(vmstat -s | grep -E '\s*([0-9]+) K used mem.+' | sed -re 's/\s*([0-9]+).+/\1/')
 ## Split total memory size into ten even chunks
 chunks=$((total / 10))
 ## Vertical bar symbol
